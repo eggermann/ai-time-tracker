@@ -2,17 +2,24 @@
 export interface HistoryItem {
   timestamp: number;
   reason: string;
-  duration: number; // Duration of this specific interval in seconds
+  duration: number; 
+}
+
+export interface TodoItem {
+  id: string;
+  text: string;
+  completed: boolean;
 }
 
 export interface TrackItem {
   id: string;
   name: string;
   description: string;
-  notes?: string; // Documentation / Notes
-  totalTime: number; // in seconds
+  notes?: string;
+  todos?: TodoItem[];
+  totalTime: number; 
   detectCount: number;
-  lastActive: number; // timestamp
+  lastActive: number; 
   history: HistoryItem[];
   isUnknown?: boolean;
 }

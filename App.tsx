@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { TrackItem } from './types';
-import { loadItems, saveItems } from './services/storageService';
+import { TrackItem, TodoItem } from './types';
+import { loadItems, saveItems, clearLocalStorage } from './services/storageService';
 import { analyzeScreenshotContext } from './services/geminiService';
 import { TrackItemCard } from './components/TrackItemCard';
 import { AddTrackModal } from './components/AddTrackModal';
 import { TimelineModal } from './components/TimelineModal';
 import { ProjectDetailsModal } from './components/ProjectDetailsModal';
 import { DocsPage } from './components/DocsPage';
-import { Play, Pause, Plus, Monitor, Mic, PictureInPicture, Download, ScanEye, Timer, List, Hourglass, HelpCircle, Heart, LayoutDashboard, AlertCircle, ArrowRight, Video } from 'lucide-react';
+import { Play, Pause, Plus, Monitor, Mic, PictureInPicture, Download, ScanEye, Timer, List, Hourglass, HelpCircle, Heart, LayoutDashboard, AlertCircle, ArrowRight, Video, Trash2, RefreshCw } from 'lucide-center';
+import * as LucideIcons from 'lucide-react';
+
+const { Play: PlayI, Pause: PauseI, Plus: PlusI, Monitor: MonitorI, Mic: MicI, PictureInPicture: PictureInPictureI, Download: DownloadI, ScanEye: ScanEyeI, Timer: TimerI, List: ListI, Hourglass: HourglassI, HelpCircle: HelpCircleI, Heart: HeartI, LayoutDashboard: LayoutDashboardI, AlertCircle: AlertCircleI, ArrowRight: ArrowRightI, Video: VideoI, Trash2: Trash2I, RefreshCw: RefreshCwI } = LucideIcons;
 
 const App: React.FC = () => {
   const [items, setItems] = useState<TrackItem[]>([]);
@@ -76,7 +79,7 @@ const App: React.FC = () => {
       setIsTracking(true);
     } catch (err: any) {
       console.error("Capture Error:", err);
-      alert("Could not start screen capture. Make sure you granted browser permissions.");
+      alert("Capture error. Check permissions.");
       setIsTracking(false);
     } finally {
       setIsInitializing(false);
@@ -178,7 +181,7 @@ const App: React.FC = () => {
                 if (prev === null) return null;
                 if (prev <= 1) {
                     stopCapture(); 
-                    alert("Auto-stop timer reached.");
+                    alert("Auto-stop reached.");
                     return null;
                 }
                 return prev - 1;
@@ -193,7 +196,8 @@ const App: React.FC = () => {
     const newItem: TrackItem = {
       id: crypto.randomUUID(),
       name, description,
-      totalTime: 0, detectCount: 0, lastActive: 0, history: []
+      totalTime: 0, detectCount: 0, lastActive: 0, history: [],
+      todos: []
     };
     setItems(prev => [...prev, newItem]);
   };
@@ -202,6 +206,12 @@ const App: React.FC = () => {
     if (confirm('Delete this track?')) {
         setItems(prev => prev.filter(i => i.id !== id));
         if (lockedProjectId === id) setLockedProjectId(null);
+    }
+  };
+
+  const handleResetData = () => {
+    if (confirm("DANGER: This will delete ALL tracked projects, notes, and history. Are you sure?")) {
+      clearLocalStorage();
     }
   };
 
@@ -280,6 +290,21 @@ const App: React.FC = () => {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  const handleQuickMic = () => {
+     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+     if (!SpeechRecognition) {
+         alert("Speech recognition not supported.");
+         return;
+     }
+     const recognition = new SpeechRecognition();
+     recognition.onresult = (e: any) => {
+        const text = e.results[0][0].transcript;
+        console.log("Quick Status Voice:", text);
+        alert(`Recorded quick note: "${text}" (Stored in logs)`);
+     };
+     recognition.start();
+  };
+
   return (
     <div className="min-h-screen bg-cyber-black text-gray-200 p-6 font-sans selection:bg-cyber-accent selection:text-black pb-48">
       
@@ -287,21 +312,29 @@ const App: React.FC = () => {
       <canvas ref={canvasRef} className="hidden" />
 
       <header className="flex flex-col md:flex-row items-start md:items-center justify-between mb-8 gap-4">
-        <div>
-          <h1 className="text-4xl font-bold text-white mb-1 flex items-center gap-2">
-            Hello: <span className="text-cyber-accent font-mono">Track What?</span>
-          </h1>
-          <p className="text-gray-500 text-sm font-mono max-w-lg">
-             Context-aware tracking powered by Gemini & EntityDB logic.
-             &copy; 2025 Dominik Eggermann
-          </p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-4xl font-bold text-white mb-1 flex items-center gap-2">
+              Hello: <span className="text-cyber-accent font-mono">Track What?</span>
+            </h1>
+            <p className="text-gray-500 text-sm font-mono max-w-lg">
+               Context-aware tracking powered by Gemini & EntityDB logic.
+               &copy; 2025 Dominik Eggermann
+            </p>
+          </div>
+          <button 
+            onClick={handleResetData}
+            className="p-2 text-gray-700 hover:text-red-500 transition-colors"
+            title="Wipe Local Database"
+          >
+            <Trash2I size={18} />
+          </button>
         </div>
 
         <div className="flex flex-col items-end gap-2">
             <div className="flex flex-wrap gap-2 items-center">
                 
-                {/* Session Limit / Auto-Stop */}
-                <div className="group relative flex items-center bg-cyber-dark border border-cyber-gray rounded-lg px-3 py-2 cursor-help" title="Automatically stop session after X minutes. Use blank or 0 for unlimited.">
+                <div className="group relative flex items-center bg-cyber-dark border border-cyber-gray rounded-lg px-3 py-2 cursor-help">
                     <span className="text-[10px] text-gray-500 mr-2 uppercase font-mono font-bold leading-none">Session Limit</span>
                     {isTracking && autoStopCountdown !== null ? (
                         <span className="text-cyber-red font-mono font-bold w-12 text-right">{formatAutoStop(autoStopCountdown)}</span>
@@ -319,18 +352,10 @@ const App: React.FC = () => {
                           <span className="text-[10px] text-gray-600 font-bold uppercase select-none">min</span>
                         </div>
                     )}
-                    <Hourglass size={14} className={`ml-2 ${isTracking && autoStopCountdown !== null ? 'text-cyber-red animate-pulse' : 'text-gray-600'}`} />
-                    
-                    {/* Tiny Helper Tooltip */}
-                    {!isTracking && (
-                      <div className="absolute top-full left-0 mt-2 hidden group-hover:block bg-cyber-gray border border-white/10 p-2 rounded text-[10px] text-gray-400 w-48 z-50 shadow-2xl">
-                        Enter minutes to auto-stop. <br/>
-                        <span className="text-cyber-accent">∞ = Unlimited session</span>
-                      </div>
-                    )}
+                    <HourglassI size={14} className={`ml-2 ${isTracking && autoStopCountdown !== null ? 'text-cyber-red animate-pulse' : 'text-gray-600'}`} />
                 </div>
 
-                <div className="flex items-center bg-cyber-dark border border-cyber-gray rounded-lg px-3 py-2" title="How often to check your screen">
+                <div className="flex items-center bg-cyber-dark border border-cyber-gray rounded-lg px-3 py-2">
                     <span className="text-[10px] text-gray-500 mr-2 uppercase font-mono font-bold leading-none">Interval</span>
                     <div className="flex items-center gap-1">
                       <input 
@@ -349,19 +374,23 @@ const App: React.FC = () => {
                       className={`p-2 rounded transition-colors ${currentView === 'dashboard' ? 'bg-cyber-accent text-black' : 'text-gray-400 hover:text-white'}`}
                       title="Dashboard"
                    >
-                      <LayoutDashboard size={18} />
+                      <LayoutDashboardI size={18} />
                    </button>
                    <button 
                       onClick={() => setCurrentView('docs')}
                       className={`p-2 rounded transition-colors ${currentView === 'docs' ? 'bg-cyber-accent text-black' : 'text-gray-400 hover:text-white'}`}
                       title="Documentation & Examples"
                    >
-                      <HelpCircle size={18} />
+                      <HelpCircleI size={18} />
                    </button>
                 </div>
 
+                <button onClick={handleQuickMic} className="p-3 rounded-lg bg-cyber-dark border border-cyber-gray hover:text-white hover:border-cyber-accent transition-colors" title="Quick Voice Status">
+                    <MicI size={18} />
+                </button>
+
                 <button onClick={togglePiP} className="p-3 rounded-lg bg-cyber-dark border border-cyber-gray hover:text-white transition-colors" title="Picture in Picture">
-                    <PictureInPicture size={18} />
+                    <PictureInPictureI size={18} />
                 </button>
 
                 <button
@@ -374,7 +403,7 @@ const App: React.FC = () => {
                         <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
                         Wait...
                       </div>
-                    ) : isTracking ? <><Pause size={18} /> Stop Session</> : <><Play size={18} /> Start Tracking</>}
+                    ) : isTracking ? <><PauseI size={18} /> Stop Session</> : <><PlayI size={18} /> Start Tracking</>}
                 </button>
             </div>
         </div>
@@ -388,14 +417,14 @@ const App: React.FC = () => {
             <div id="hit-panel-container">
               <div className="flex justify-between items-center mb-6">
                   <h2 className="text-xl text-white font-mono flex items-center gap-2">
-                      <ScanEye size={20} className="text-cyber-red" />
+                      <ScanEyeI size={20} className="text-cyber-red" />
                       Hit Panel
                   </h2>
                   <button 
                       onClick={() => setIsModalOpen(true)}
                       className="flex items-center gap-2 text-sm text-gray-400 hover:text-white border border-dashed border-gray-700 px-3 py-1 rounded transition-colors"
                   >
-                      <Plus size={14} /> Add Vector
+                      <PlusI size={14} /> Add Vector
                   </button>
               </div>
 
@@ -403,7 +432,7 @@ const App: React.FC = () => {
               {items.length === 1 && !isTracking && (
                 <div className="bg-cyber-dark border border-cyber-gray p-10 rounded-3xl text-center space-y-4 max-w-xl mx-auto my-12 animate-in fade-in zoom-in-95 duration-700">
                   <div className="bg-cyber-accent/10 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-cyber-accent/20">
-                    <AlertCircle className="text-cyber-accent" size={32} />
+                    <AlertCircleI className="text-cyber-accent" size={32} />
                   </div>
                   <h3 className="text-2xl font-bold text-white">Let's track something.</h3>
                   <p className="text-gray-500">
@@ -414,21 +443,13 @@ const App: React.FC = () => {
                       onClick={() => setIsModalOpen(true)}
                       className="flex items-center gap-2 bg-cyber-accent text-black font-bold px-8 py-3 rounded-full hover:scale-105 transition-transform w-full sm:w-auto justify-center"
                     >
-                      <Plus size={18} /> Create Vector
+                      <PlusI size={18} /> Create Vector
                     </button>
                     <button 
                       onClick={startCapture}
                       className="flex items-center gap-2 bg-white/5 text-white border border-white/20 font-bold px-8 py-3 rounded-full hover:bg-white/10 hover:scale-105 transition-all w-full sm:w-auto justify-center"
                     >
-                      <Video size={18} /> Start Recording
-                    </button>
-                  </div>
-                  <div className="pt-2">
-                    <button 
-                      onClick={() => setCurrentView('docs')}
-                      className="text-xs text-gray-600 hover:text-gray-400 transition-colors underline"
-                    >
-                      How does this work?
+                      <VideoI size={18} /> Start Recording
                     </button>
                   </div>
                 </div>
@@ -463,7 +484,7 @@ const App: React.FC = () => {
             <div className="flex items-center gap-3">
                  <div className="relative">
                     {(timeLeft <= 2 || isScanningRef.current) && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-20"></span>}
-                    <Monitor className={(timeLeft <= 2 || isScanningRef.current) ? "text-green-400" : "text-gray-500"} size={18} />
+                    <MonitorI className={(timeLeft <= 2 || isScanningRef.current) ? "text-green-400" : "text-gray-500"} size={18} />
                  </div>
                  <div className="flex flex-col text-left">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{isScanningRef.current ? "Analyzing..." : "Auto-Scanning"}</span>
@@ -481,20 +502,26 @@ const App: React.FC = () => {
       {/* Persistent Bottom Bar */}
       <div className="fixed bottom-0 left-0 w-full bg-cyber-black/95 backdrop-blur border-t-2 border-green-500/50 p-4 px-8 flex justify-between items-center z-50">
         <div className="flex items-center gap-4">
-            <div className="p-2 bg-green-500/10 rounded-full"><Timer className="text-green-500" size={24} /></div>
+            <div className="p-2 bg-green-500/10 rounded-full"><TimerI className="text-green-500" size={24} /></div>
             <div className="flex flex-col">
                 <span className="text-[10px] text-green-500 font-mono uppercase tracking-widest font-bold">Total Project Time</span>
                 <span className="text-2xl font-bold font-mono text-white tabular-nums">{formatTotalTime(totalFocusTime)}</span>
             </div>
         </div>
         <button onClick={() => setIsTimelineOpen(true)} className="px-5 py-2.5 bg-green-500/10 text-green-400 border border-green-500/30 rounded-lg flex items-center gap-2 transition-all font-mono text-sm hover:bg-green-500/20">
-            <List size={16} /> View Timeline
+            <ListI size={16} /> View Timeline
         </button>
       </div>
 
       <AddTrackModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSave={handleAddItem} initialName={modalInitialName} initialDescription={modalInitialDesc} />
       <TimelineModal isOpen={isTimelineOpen} onClose={() => setIsTimelineOpen(false)} items={items} />
-      <ProjectDetailsModal isOpen={!!selectedDocItem} onClose={() => setSelectedDocItem(null)} item={selectedDocItem} onSaveNotes={(id, n) => setItems(prev => prev.map(i => i.id === id ? {...i, notes: n} : i))} />
+      <ProjectDetailsModal 
+        isOpen={!!selectedDocItem} 
+        onClose={() => setSelectedDocItem(null)} 
+        item={selectedDocItem} 
+        onSaveNotes={(id, n) => setItems(prev => prev.map(i => i.id === id ? {...i, notes: n} : i))}
+        onSaveTodos={(id, t) => setItems(prev => prev.map(i => i.id === id ? {...i, todos: t} : i))}
+      />
     </div>
   );
 };
