@@ -25,7 +25,7 @@ export const analyzeScreenshotContext = async (
 
   const prompt = `
     You are a semantic vector classifier. I will provide a screenshot of a user's screen.
-    
+
     Here are the known Track Items (projects/contexts) the user is tracking:
     ${knownContexts}
 

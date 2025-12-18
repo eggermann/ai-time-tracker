@@ -9,6 +9,7 @@ export interface TrackItem {
   id: string;
   name: string;
   description: string;
+  notes?: string; // Documentation / Notes
   totalTime: number; // in seconds
   detectCount: number;
   lastActive: number; // timestamp

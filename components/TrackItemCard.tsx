@@ -1,14 +1,19 @@
 import React, { useState } from 'react';
 import { TrackItem } from '../types';
-import { Clock, Activity, History, BrainCircuit, ChevronDown, ChevronUp, PlusCircle, ArrowRight, Copy, Check } from 'lucide-react';
+import { Clock, Activity, History, BrainCircuit, ChevronDown, ChevronUp, PlusCircle, ArrowRight, Copy, Check, Lock, Unlock, FileText, Edit2 } from 'lucide-react';
 
 interface Props {
   item: TrackItem;
   allContexts: { id: string; name: string }[];
   isActive: boolean;
+  isLocked: boolean;
+  isDimmed: boolean; // If another card is locked, this one is dimmed
+  onToggleLock: (id: string) => void;
+  onOpenDetails: (item: TrackItem) => void;
   onEdit?: (id: string) => void;
   onDelete?: (id: string) => void;
   onMoveHistoryItem: (itemId: string, historyIndex: number, targetItemId: string) => void;
+  onEditHistoryItem?: (itemId: string, historyIndex: number, newReason: string) => void;
   onCreateFromHistory: (reason: string) => void;
   onCopyLog: (itemId: string) => void;
 }
@@ -17,13 +22,22 @@ export const TrackItemCard: React.FC<Props> = ({
   item, 
   allContexts, 
   isActive, 
+  isLocked,
+  isDimmed,
+  onToggleLock,
+  onOpenDetails,
   onDelete, 
   onMoveHistoryItem,
+  onEditHistoryItem,
   onCreateFromHistory,
   onCopyLog
 }) => {
   const [isTrainMode, setIsTrainMode] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
+  
+  // Editing state
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editValue, setEditValue] = useState("");
 
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
@@ -42,8 +56,30 @@ export const TrackItemCard: React.FC<Props> = ({
     setTimeout(() => setIsCopied(false), 2000);
   };
 
+  const startEditing = (index: number, currentReason: string) => {
+    setEditingIndex(index);
+    setEditValue(currentReason);
+  };
+
+  const saveEditing = (index: number) => {
+    if (onEditHistoryItem && editValue.trim()) {
+        onEditHistoryItem(item.id, index, editValue.trim());
+    }
+    setEditingIndex(null);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent, index: number) => {
+      if (e.key === 'Enter') {
+          saveEditing(index);
+      } else if (e.key === 'Escape') {
+          setEditingIndex(null);
+      }
+  };
+
   // Group recurring reasons for suggestions (simple heuristic)
   const isRecurring = (reason: string) => {
+    const ignoreList = ["Analysis failed", "Unknown activity detected", "Analyzing..."];
+    if (ignoreList.includes(reason)) return false;
     return item.history.filter(h => h.reason === reason).length > 2;
   };
 
@@ -53,26 +89,52 @@ export const TrackItemCard: React.FC<Props> = ({
     <div 
       className={`
         relative overflow-hidden rounded-xl bg-cyber-dark border transition-all duration-300 flex flex-col
-        ${isActive ? 'active-pulse border-cyber-red' : 'border-cyber-gray hover:border-cyber-accent'}
+        ${isLocked ? 'border-yellow-400 shadow-[0_0_20px_rgba(250,204,21,0.2)] scale-[1.02] z-10' : ''}
+        ${isActive && !isLocked ? 'active-pulse border-cyber-red' : ''}
+        ${!isActive && !isLocked ? 'border-cyber-gray hover:border-cyber-accent' : ''}
+        ${isDimmed ? 'opacity-30 grayscale blur-[1px]' : 'opacity-100'}
       `}
     >
       {/* Active Indicator Strip */}
       {isActive && (
-        <div className="absolute top-0 left-0 w-full h-1 bg-cyber-red shadow-[0_0_10px_#ff2a6d]" />
+        <div className={`absolute top-0 left-0 w-full h-1 shadow-[0_0_10px] ${isLocked ? 'bg-yellow-400 shadow-yellow-400' : 'bg-cyber-red shadow-[#ff2a6d]'}`} />
+      )}
+
+      {/* Locked Badge */}
+      {isLocked && (
+          <div className="absolute top-2 right-1/2 translate-x-1/2 bg-yellow-400 text-black text-[10px] font-bold px-2 py-0.5 rounded-b shadow-lg z-20">
+              LOCKED (SOLO)
+          </div>
       )}
 
       <div className="p-4 space-y-3 flex-grow">
         <div className="flex justify-between items-start">
-          <h3 className="font-mono font-bold text-lg text-white truncate pr-2 flex-1">
-            {item.name}
-          </h3>
-          <div className="flex items-center gap-1">
-            {isActive && (
-                <span className="flex h-3 w-3 relative mr-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyber-red opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-cyber-red"></span>
-                </span>
+          <div className="flex-1 pr-2 min-w-0">
+             <h3 onClick={() => onOpenDetails(item)} className="font-mono font-bold text-lg text-white truncate hover:underline decoration-cyber-accent cursor-pointer">
+                {item.name}
+            </h3>
+          </div>
+          
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Lock / Solo Button */}
+            {!item.isUnknown && (
+                <button 
+                    onClick={() => onToggleLock(item.id)}
+                    className={`p-1.5 rounded transition-colors ${isLocked ? 'text-yellow-400 bg-yellow-400/10' : 'text-gray-600 hover:text-white hover:bg-white/10'}`}
+                    title={isLocked ? "Unlock project" : "Lock tracking to this project (Solo Mode)"}
+                >
+                    {isLocked ? <Lock size={16} /> : <Unlock size={16} />}
+                </button>
             )}
+
+            {/* Doc Button */}
+             <button 
+                onClick={() => onOpenDetails(item)}
+                className="p-1.5 rounded hover:bg-white/10 text-gray-500 hover:text-white transition-colors"
+                title="Open Documentation & Details"
+            >
+                <FileText size={16} />
+            </button>
             
             <button 
                 onClick={handleCopyClick}
@@ -177,10 +239,32 @@ export const TrackItemCard: React.FC<Props> = ({
                                     )}
                                 </div>
                                 <div className="flex items-center justify-between gap-2">
-                                    <span className="text-xs text-white truncate flex-1" title={h.reason}>{h.reason}</span>
+                                    {editingIndex === originalIndex ? (
+                                        <input 
+                                            autoFocus
+                                            value={editValue}
+                                            onChange={(e) => setEditValue(e.target.value)}
+                                            onBlur={() => saveEditing(originalIndex)}
+                                            onKeyDown={(e) => handleKeyDown(e, originalIndex)}
+                                            className="flex-1 bg-black text-white text-xs border border-cyber-accent rounded px-1 outline-none font-sans"
+                                        />
+                                    ) : (
+                                        <span 
+                                            className="text-xs text-white truncate flex-1 hover:text-cyber-accent cursor-pointer border border-transparent hover:border-gray-800 rounded px-1 -ml-1 transition-colors" 
+                                            title={h.reason}
+                                            onClick={() => startEditing(originalIndex, h.reason)}
+                                        >
+                                            {h.reason}
+                                        </span>
+                                    )}
                                     
                                     {/* Action Buttons for History List */}
                                     <div className="flex items-center gap-1 opacity-100 sm:opacity-50 group-hover:opacity-100 transition-opacity">
+                                        {/* Edit Button Explicit */}
+                                        <button onClick={() => startEditing(originalIndex, h.reason)} className="text-gray-500 hover:text-white p-1">
+                                            <Edit2 size={10} />
+                                        </button>
+
                                         {/* Create New Track from this */}
                                         {item.isUnknown && (
                                             <button 
