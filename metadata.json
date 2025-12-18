@@ -1,0 +1,9 @@
+{
+  "name": "TrackWhat Context Awareness",
+  "description": "A semantic context tracker using Gemini and screen capture to analyze and categorize your workflow automatically.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ]
+}
