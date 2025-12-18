@@ -3,9 +3,30 @@ import { TrackItem, AnalysisResult } from '../types';
 
 let aiInstance: GoogleGenAI | null = null;
 
+const getGeminiApiKey = (): string | undefined => {
+  const fromViteEnv =
+    (import.meta as any)?.env?.VITE_GEMINI_API_KEY ??
+    (import.meta as any)?.env?.GEMINI_API_KEY ??
+    (import.meta as any)?.env?.VITE_API_KEY ??
+    (import.meta as any)?.env?.API_KEY;
+
+  const fromDefine =
+    typeof process !== "undefined"
+      ? (process.env?.GEMINI_API_KEY ?? process.env?.API_KEY)
+      : undefined;
+
+  return (fromViteEnv ?? fromDefine) || undefined;
+};
+
 const getAI = () => {
   if (!aiInstance) {
-    aiInstance = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const apiKey = getGeminiApiKey();
+    if (!apiKey) {
+      throw new Error(
+        "Missing Gemini API key. Set GEMINI_API_KEY (or VITE_GEMINI_API_KEY) in .env.local and restart the dev server."
+      );
+    }
+    aiInstance = new GoogleGenAI({ apiKey });
   }
   return aiInstance;
 };
@@ -15,7 +36,6 @@ export const analyzeScreenshotContext = async (
   base64Image: string,
   trackItems: TrackItem[]
 ): Promise<AnalysisResult> => {
-  const ai = getAI();
   const model = "gemini-3-flash-preview"; 
 
   const knownContexts = trackItems
@@ -40,6 +60,7 @@ export const analyzeScreenshotContext = async (
   `;
 
   try {
+    const ai = getAI();
     const response = await ai.models.generateContent({
       model: model,
       contents: {

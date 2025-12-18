@@ -276,6 +276,13 @@ const App: React.FC = () => {
   };
 
   const totalFocusTime = items.filter(i => !i.isUnknown).reduce((acc, curr) => acc + curr.totalTime, 0);
+  const hasAnyLocalData = items.some(item =>
+    item.totalTime > 0 ||
+    item.detectCount > 0 ||
+    item.history.length > 0 ||
+    (item.todos?.length ?? 0) > 0 ||
+    !!item.notes?.trim()
+  );
 
   const formatTotalTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
@@ -429,7 +436,7 @@ const App: React.FC = () => {
               </div>
 
               {/* Empty State / Getting Started */}
-              {items.length === 1 && !isTracking && (
+              {items.length === 1 && !isTracking && !hasAnyLocalData && (
                 <div className="bg-cyber-dark border border-cyber-gray p-10 rounded-3xl text-center space-y-4 max-w-xl mx-auto my-12 animate-in fade-in zoom-in-95 duration-700">
                   <div className="bg-cyber-accent/10 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 border border-cyber-accent/20">
                     <AlertCircleI className="text-cyber-accent" size={32} />
@@ -488,7 +495,14 @@ const App: React.FC = () => {
                  </div>
                  <div className="flex flex-col text-left">
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{isScanningRef.current ? "Analyzing..." : "Auto-Scanning"}</span>
-                    <span className="text-xs text-white/80 font-mono truncate max-w-[150px]">{lastAnalysis || `Next scan in ${timeLeft}s`}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-white/80 font-mono truncate max-w-[150px]">
+                        {lastAnalysis ?? "Waiting..."}
+                      </span>
+                      <span className="text-[10px] text-gray-400 font-mono tabular-nums whitespace-nowrap">
+                        {isScanningRef.current ? "scan…" : `next ${timeLeft}s`}
+                      </span>
+                    </div>
                  </div>
             </div>
             <div className="h-6 w-px bg-cyber-gray mx-1"></div>
