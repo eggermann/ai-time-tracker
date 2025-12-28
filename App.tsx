@@ -1,28 +1,33 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TrackItem, TodoItem } from './types';
 import { loadItems, saveItems, clearLocalStorage } from './services/storageService';
-import { analyzeScreenshotContext } from './services/geminiService';
+import { analyzeScreenshotContext, type AiProvider } from './services/geminiService';
 import { TrackItemCard } from './components/TrackItemCard';
 import { AddTrackModal } from './components/AddTrackModal';
 import { TimelineModal } from './components/TimelineModal';
 import { ProjectDetailsModal } from './components/ProjectDetailsModal';
 import { DocsPage } from './components/DocsPage';
+import { ReviewCenter } from './components/ReviewCenter';
 import { Play, Pause, Plus, Monitor, Mic, PictureInPicture, Download, ScanEye, Timer, List, Hourglass, HelpCircle, Heart, LayoutDashboard, AlertCircle, ArrowRight, Video, Trash2, RefreshCw } from 'lucide-center';
 import * as LucideIcons from 'lucide-react';
 
-const { Play: PlayI, Pause: PauseI, Plus: PlusI, Monitor: MonitorI, Mic: MicI, PictureInPicture: PictureInPictureI, Download: DownloadI, ScanEye: ScanEyeI, Timer: TimerI, List: ListI, Hourglass: HourglassI, HelpCircle: HelpCircleI, Heart: HeartI, LayoutDashboard: LayoutDashboardI, AlertCircle: AlertCircleI, ArrowRight: ArrowRightI, Video: VideoI, Trash2: Trash2I, RefreshCw: RefreshCwI } = LucideIcons;
+const { Play: PlayI, Pause: PauseI, Plus: PlusI, Monitor: MonitorI, Mic: MicI, PictureInPicture: PictureInPictureI, Download: DownloadI, ScanEye: ScanEyeI, Timer: TimerI, List: ListI, Hourglass: HourglassI, HelpCircle: HelpCircleI, Heart: HeartI, LayoutDashboard: LayoutDashboardI, AlertCircle: AlertCircleI, ArrowRight: ArrowRightI, Video: VideoI, Trash2: Trash2I, RefreshCw: RefreshCwI, ListChecks: ListChecksI, FolderOpen: FolderOpenI } = LucideIcons;
+
+const RATE_LIMITS = { perMinute: 6, perHour: 120 };
 
 const App: React.FC = () => {
   const [items, setItems] = useState<TrackItem[]>([]);
   const [isTracking, setIsTracking] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [intervalTime, setIntervalTime] = useState(30); 
+  const [effectiveInterval, setEffectiveInterval] = useState(30);
   const [autoStopMinutes, setAutoStopMinutes] = useState<string>(''); 
   const [timeLeft, setTimeLeft] = useState(0); 
   const [autoStopCountdown, setAutoStopCountdown] = useState<number | null>(null); 
+  const [cooldownLeft, setCooldownLeft] = useState(0);
   
   // Navigation & View
-  const [currentView, setCurrentView] = useState<'dashboard' | 'docs'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'docs' | 'review'>('dashboard');
 
   // Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -35,6 +40,17 @@ const App: React.FC = () => {
   // Modal Pre-fill state
   const [modalInitialName, setModalInitialName] = useState('');
   const [modalInitialDesc, setModalInitialDesc] = useState('');
+  const [linkedFolder, setLinkedFolder] = useState<{ name: string; handle: FileSystemDirectoryHandle } | null>(null);
+  const [aiProvider, setAiProvider] = useState<AiProvider>(() => {
+    const stored = localStorage.getItem('trackwhat_ai_provider');
+    if (stored === 'openai' || stored === 'gemini') return stored;
+    const envProvider =
+      (import.meta as any)?.env?.VITE_AI_PROVIDER ??
+      (import.meta as any)?.env?.AI_PROVIDER;
+    return typeof envProvider === 'string' && envProvider.toLowerCase() === 'openai'
+      ? 'openai'
+      : 'gemini';
+  });
 
   const [lastAnalysis, setLastAnalysis] = useState<string | null>(null);
   const [scanCount, setScanCount] = useState(0);
@@ -45,6 +61,12 @@ const App: React.FC = () => {
   
   const itemsRef = useRef(items);
   const isScanningRef = useRef(false);
+  const effectiveIntervalRef = useRef(intervalTime);
+  const stableMatchIdRef = useRef<string | null>(null);
+  const stableMatchCountRef = useRef(0);
+  const errorBackoffRef = useRef(0);
+  const scanTimestampsRef = useRef<number[]>([]);
+  const cooldownLeftRef = useRef(0);
 
   useEffect(() => {
     setItems(loadItems());
@@ -54,6 +76,24 @@ const App: React.FC = () => {
     itemsRef.current = items;
     if (items.length > 0) saveItems(items);
   }, [items]);
+
+  useEffect(() => {
+    effectiveIntervalRef.current = effectiveInterval;
+  }, [effectiveInterval]);
+
+  useEffect(() => {
+    cooldownLeftRef.current = cooldownLeft;
+  }, [cooldownLeft]);
+
+  useEffect(() => {
+    setEffectiveInterval(intervalTime);
+    stableMatchIdRef.current = null;
+    stableMatchCountRef.current = 0;
+  }, [intervalTime]);
+
+  useEffect(() => {
+    localStorage.setItem('trackwhat_ai_provider', aiProvider);
+  }, [aiProvider]);
 
   const startCapture = async () => {
     setIsInitializing(true);
@@ -65,6 +105,11 @@ const App: React.FC = () => {
       setStream(mediaStream);
       setScanCount(0);
       setTimeLeft(1);
+      setEffectiveInterval(intervalTime);
+      setCooldownLeft(0);
+      stableMatchIdRef.current = null;
+      stableMatchCountRef.current = 0;
+      errorBackoffRef.current = 0;
       
       if (autoStopMinutes && !isNaN(Number(autoStopMinutes)) && Number(autoStopMinutes) > 0) {
         setAutoStopCountdown(Number(autoStopMinutes) * 60);
@@ -94,29 +139,87 @@ const App: React.FC = () => {
     setIsTracking(false);
     setLastAnalysis(null);
     setAutoStopCountdown(null);
+    setCooldownLeft(0);
+    setTimeLeft(0);
   }, [stream]);
+
+  const isRateLimited = useCallback(() => {
+    const now = Date.now();
+    const minuteAgo = now - 60 * 1000;
+    const hourAgo = now - 60 * 60 * 1000;
+
+    const recent = scanTimestampsRef.current.filter(ts => ts > hourAgo);
+    scanTimestampsRef.current = recent;
+    let perMinuteCount = 0;
+    for (const ts of recent) {
+      if (ts > minuteAgo) perMinuteCount += 1;
+    }
+
+    if (perMinuteCount >= RATE_LIMITS.perMinute || recent.length >= RATE_LIMITS.perHour) {
+      return true;
+    }
+
+    scanTimestampsRef.current.push(now);
+    return false;
+  }, []);
+
+  const updateAdaptiveInterval = useCallback((matchId: string | null) => {
+    const base = intervalTime;
+    if (!matchId) {
+      stableMatchIdRef.current = null;
+      stableMatchCountRef.current = 0;
+      setEffectiveInterval(base);
+      return base;
+    }
+
+    if (matchId === stableMatchIdRef.current) {
+      stableMatchCountRef.current += 1;
+    } else {
+      stableMatchIdRef.current = matchId;
+      stableMatchCountRef.current = 1;
+    }
+
+    const stableCount = stableMatchCountRef.current;
+    const multiplier = stableCount >= 6 ? 4 : stableCount >= 4 ? 3 : stableCount >= 2 ? 2 : 1;
+    const nextInterval = Math.max(base, Math.min(base * 4, base * multiplier));
+    setEffectiveInterval(nextInterval);
+    return nextInterval;
+  }, [intervalTime]);
+
+  const applyErrorBackoff = useCallback(() => {
+    errorBackoffRef.current = Math.min(errorBackoffRef.current + 1, 3);
+    const cooldownSeconds = Math.min(
+      180,
+      intervalTime * Math.pow(2, errorBackoffRef.current)
+    );
+    setCooldownLeft(cooldownSeconds);
+    setTimeLeft(cooldownSeconds);
+  }, [intervalTime]);
 
   const performScan = useCallback(async () => {
       if (!isTracking) return;
+      if (cooldownLeftRef.current > 0) return;
 
       if (lockedProjectId) {
          setLastAnalysis(`LOCKED: ${itemsRef.current.find(i => i.id === lockedProjectId)?.name || 'Project'}`);
          setScanCount(c => c + 1);
          setItems(prevItems => {
              const now = Date.now();
+             const duration = effectiveIntervalRef.current;
              return prevItems.map(item => {
                 if (item.id === lockedProjectId) {
                     return {
                         ...item,
                         detectCount: item.detectCount + 1,
-                        totalTime: item.totalTime + intervalTime,
+                        totalTime: item.totalTime + duration,
                         lastActive: now,
-                        history: [...item.history, { timestamp: now, reason: "Solo Mode (Locked)", duration: intervalTime }]
+                        history: [...item.history, { timestamp: now, reason: "Solo Mode (Locked)", duration, matchId: lockedProjectId, confidenceHint: "locked" }]
                     };
                 }
                 return item;
              });
          });
+         setEffectiveInterval(intervalTime);
          setTimeLeft(intervalTime);
          return; 
       }
@@ -135,9 +238,27 @@ const App: React.FC = () => {
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const base64Image = canvas.toDataURL('image/png').split(',')[1];
-        setLastAnalysis("Analyzing...");
-        const result = await analyzeScreenshotContext(base64Image, itemsRef.current);
-        setLastAnalysis(result.matchId ? `Match: ${result.matchId === 'unknown' ? 'Idle' : 'Tracked'}` : "No match");
+        const duration = effectiveIntervalRef.current;
+        const rateLimited = isRateLimited();
+        const result = rateLimited
+          ? { matchId: null, reason: "Rate limit reached", confidenceHint: "weak", action: null }
+          : await (async () => {
+              setLastAnalysis("Analyzing...");
+              return analyzeScreenshotContext(base64Image, itemsRef.current, aiProvider);
+            })();
+
+        if (rateLimited) {
+          setLastAnalysis("Rate limited");
+        } else if (result.reason === "Analysis failed") {
+          setLastAnalysis("Analysis failed (backoff)");
+        } else {
+          const matchedName = itemsRef.current.find(i => i.id === result.matchId)?.name;
+          setLastAnalysis(result.matchId ? `Match: ${matchedName ?? 'Tracked'}` : "No match");
+        }
+
+        const normalizedConfidence =
+          result.confidenceHint ?? (result.matchId ? "medium" : "weak");
+
         setScanCount(c => c + 1);
 
         setItems(prevItems => {
@@ -148,26 +269,38 @@ const App: React.FC = () => {
                   return {
                   ...item,
                   detectCount: item.detectCount + 1,
-                  totalTime: item.totalTime + intervalTime,
+                  totalTime: item.totalTime + duration,
                   lastActive: now,
-                  history: [...item.history, { timestamp: now, reason: result.reason, duration: intervalTime }]
+                  history: [...item.history, { timestamp: now, reason: result.reason, duration, matchId: result.matchId, candidates: result.candidates, confidenceHint: normalizedConfidence, whyNotSecond: result.whyNotSecond, action: result.action ?? null }]
                   };
               }
               return item;
             });
         });
+
+        if (result.reason === "Analysis failed") {
+          applyErrorBackoff();
+        } else {
+          errorBackoffRef.current = 0;
+          setCooldownLeft(0);
+          const nextInterval = updateAdaptiveInterval(result.matchId);
+          setTimeLeft(nextInterval);
+        }
       }
       
       isScanningRef.current = false;
-      setTimeLeft(intervalTime);
 
-  }, [isTracking, stream, intervalTime, lockedProjectId]);
+  }, [isTracking, stream, intervalTime, lockedProjectId, applyErrorBackoff, isRateLimited, updateAdaptiveInterval, aiProvider]);
 
   useEffect(() => {
     let timer: any;
     if (isTracking) {
       timer = setInterval(() => {
-        if (!isScanningRef.current) {
+        if (cooldownLeft > 0) {
+            setCooldownLeft(prev => (prev <= 1 ? 0 : prev - 1));
+            setTimeLeft(prev => (prev <= 1 ? 0 : prev - 1));
+        }
+        if (cooldownLeft <= 0 && !isScanningRef.current) {
             setTimeLeft(prev => {
                 if (prev <= 1) {
                     performScan();
@@ -190,12 +323,19 @@ const App: React.FC = () => {
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [isTracking, autoStopCountdown, stopCapture, performScan]); 
+  }, [isTracking, autoStopCountdown, stopCapture, performScan, cooldownLeft]); 
 
-  const handleAddItem = (name: string, description: string) => {
+  const handleAddItem = (
+    name: string,
+    description: string,
+    options: { keywords: string[]; doList: string[]; dontList: string[] }
+  ) => {
     const newItem: TrackItem = {
       id: crypto.randomUUID(),
       name, description,
+      keywords: options.keywords ?? [],
+      doList: options.doList ?? [],
+      dontList: options.dontList ?? [],
       totalTime: 0, detectCount: 0, lastActive: 0, history: [],
       todos: []
     };
@@ -226,7 +366,14 @@ const App: React.FC = () => {
         const sourceItem = prevItems.find(i => i.id === sourceItemId);
         if (!sourceItem || !sourceItem.history[historyIndex]) return prevItems;
         const historyItemToMove = sourceItem.history[historyIndex];
-        const duration = historyItemToMove.duration || intervalTime;
+        const duration = historyItemToMove.duration || effectiveIntervalRef.current || intervalTime;
+        const movedHistoryItem = {
+          ...historyItemToMove,
+          matchId: targetItemId,
+          confidenceHint: "manual",
+          candidates: undefined,
+          whyNotSecond: undefined,
+        };
 
         return prevItems.map(item => {
             if (item.id === sourceItemId) {
@@ -235,7 +382,7 @@ const App: React.FC = () => {
                 return { ...item, history: newHistory, detectCount: Math.max(0, item.detectCount - 1), totalTime: Math.max(0, item.totalTime - duration) };
             }
             if (item.id === targetItemId) {
-                const newHistory = [...item.history, historyItemToMove].sort((a, b) => a.timestamp - b.timestamp);
+                const newHistory = [...item.history, movedHistoryItem].sort((a, b) => a.timestamp - b.timestamp);
                 return { ...item, history: newHistory, detectCount: item.detectCount + 1, totalTime: item.totalTime + duration };
             }
             return item;
@@ -249,13 +396,46 @@ const App: React.FC = () => {
             if (item.id === itemId) {
                 const newHistory = [...item.history];
                 if (newHistory[historyIndex]) {
-                    newHistory[historyIndex] = { ...newHistory[historyIndex], reason: newReason };
+                    newHistory[historyIndex] = { ...newHistory[historyIndex], reason: newReason, confidenceHint: "manual", candidates: undefined, whyNotSecond: undefined };
                 }
                 return { ...item, history: newHistory };
             }
             return item;
         });
     });
+  };
+
+  const handleToggleEdgeCase = (itemId: string, historyIndex: number) => {
+    setItems(prevItems =>
+      prevItems.map(item => {
+        if (item.id !== itemId) return item;
+        const newHistory = [...item.history];
+        if (newHistory[historyIndex]) {
+          newHistory[historyIndex] = {
+            ...newHistory[historyIndex],
+            isEdgeCase: !newHistory[historyIndex].isEdgeCase,
+          };
+        }
+        return { ...item, history: newHistory };
+      })
+    );
+  };
+
+  const handleLinkProjectFolder = async () => {
+    const picker = (window as any).showDirectoryPicker;
+    if (!picker) {
+      alert("File System Access API not supported in this browser.");
+      return;
+    }
+    try {
+      const handle = await picker();
+      setLinkedFolder({ name: handle.name, handle });
+    } catch (error: any) {
+      if (error?.name !== "AbortError") {
+        console.error("Directory picker error:", error);
+        alert("Could not link project folder.");
+      }
+    }
   };
 
   const togglePiP = async () => {
@@ -283,6 +463,30 @@ const App: React.FC = () => {
     (item.todos?.length ?? 0) > 0 ||
     !!item.notes?.trim()
   );
+  const isReviewableReason = (reason: string) => {
+    const ignoreList = new Set([
+      'Analysis failed',
+      'Analyzing...',
+      'Rate limit reached',
+    ]);
+    return reason ? !ignoreList.has(reason) : false;
+  };
+
+  const unknownCount =
+    items.find(item => item.isUnknown)?.history.filter(entry => isReviewableReason(entry.reason)).length ?? 0;
+  const lowConfidenceCount = items.reduce((count, item) => {
+    if (item.isUnknown) return count;
+    const additional = item.history.filter(entry => {
+      if (!isReviewableReason(entry.reason)) return false;
+      const confidence = (entry.confidenceHint ?? '').toLowerCase();
+      if (confidence === 'legacy' || confidence === 'manual' || confidence === 'locked') return false;
+      if (!entry.matchId) return true;
+      if (!confidence) return false;
+      return confidence !== 'strong';
+    }).length;
+    return count + additional;
+  }, 0);
+  const reviewCount = unknownCount + lowConfidenceCount;
 
   const formatTotalTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600);
@@ -374,6 +578,26 @@ const App: React.FC = () => {
                       <span className="text-[10px] text-gray-600 font-bold uppercase select-none">sec</span>
                     </div>
                 </div>
+
+                <div className="flex items-center bg-cyber-dark border border-cyber-gray rounded-lg px-2 py-1">
+                    <span className="text-[10px] text-gray-500 mr-2 uppercase font-mono font-bold leading-none">LLM</span>
+                    <div className="flex bg-black/40 border border-cyber-gray rounded-md p-0.5 gap-0.5">
+                      <button
+                        onClick={() => setAiProvider('gemini')}
+                        className={`px-2 py-1 text-[10px] font-mono rounded ${aiProvider === 'gemini' ? 'bg-cyber-accent text-black' : 'text-gray-400 hover:text-white'}`}
+                        title="Use Gemini"
+                      >
+                        Gemini
+                      </button>
+                      <button
+                        onClick={() => setAiProvider('openai')}
+                        className={`px-2 py-1 text-[10px] font-mono rounded ${aiProvider === 'openai' ? 'bg-cyber-accent text-black' : 'text-gray-400 hover:text-white'}`}
+                        title="Use OpenAI"
+                      >
+                        OpenAI
+                      </button>
+                    </div>
+                </div>
                 
                 <div className="flex bg-cyber-dark border border-cyber-gray rounded-lg p-1 gap-1">
                    <button 
@@ -390,10 +614,31 @@ const App: React.FC = () => {
                    >
                       <HelpCircleI size={18} />
                    </button>
+                   <button 
+                      onClick={() => setCurrentView('review')}
+                      className={`relative p-2 rounded transition-colors ${currentView === 'review' ? 'bg-cyber-accent text-black' : 'text-gray-400 hover:text-white'}`}
+                      title="Review Center"
+                   >
+                      <ListChecksI size={18} />
+                      {reviewCount > 0 && (
+                        <span className="absolute -top-1 -right-1 text-[10px] leading-none bg-cyber-red text-white rounded-full px-1.5 py-0.5 font-mono">
+                          {reviewCount}
+                        </span>
+                      )}
+                   </button>
                 </div>
 
                 <button onClick={handleQuickMic} className="p-3 rounded-lg bg-cyber-dark border border-cyber-gray hover:text-white hover:border-cyber-accent transition-colors" title="Quick Voice Status">
                     <MicI size={18} />
+                </button>
+
+                <button
+                    onClick={handleLinkProjectFolder}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-cyber-dark border border-cyber-gray hover:text-white hover:border-cyber-accent transition-colors text-xs font-mono"
+                    title={linkedFolder ? `Linked: ${linkedFolder.name}` : "Link Project Folder"}
+                >
+                    <FolderOpenI size={16} />
+                    {linkedFolder ? linkedFolder.name : "Link Folder"}
                 </button>
 
                 <button onClick={togglePiP} className="p-3 rounded-lg bg-cyber-dark border border-cyber-gray hover:text-white transition-colors" title="Picture in Picture">
@@ -420,6 +665,13 @@ const App: React.FC = () => {
       <main className="relative min-h-[50vh]">
           {currentView === 'docs' ? (
               <DocsPage onBack={() => setCurrentView('dashboard')} />
+          ) : currentView === 'review' ? (
+              <ReviewCenter
+                items={items}
+                onMoveHistoryItem={handleMoveHistoryItem}
+                onCreateFromHistory={handleCreateFromHistory}
+                onToggleEdgeCase={handleToggleEdgeCase}
+              />
           ) : (
             <div id="hit-panel-container">
               <div className="flex justify-between items-center mb-6">

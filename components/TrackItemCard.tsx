@@ -237,6 +237,9 @@ export const TrackItemCard: React.FC<Props> = ({
                                     {recurring && item.isUnknown && (
                                          <span className="text-[8px] px-1 bg-cyber-accent text-black rounded font-bold">SUGGEST</span>
                                     )}
+                                    {h.isEdgeCase && (
+                                         <span className="text-[8px] px-1 bg-yellow-400 text-black rounded font-bold">EDGE</span>
+                                    )}
                                 </div>
                                 <div className="flex items-center justify-between gap-2">
                                     {editingIndex === originalIndex ? (

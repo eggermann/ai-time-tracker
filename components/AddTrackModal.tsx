@@ -4,7 +4,7 @@ import { X, Save, Sparkles } from 'lucide-react';
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (name: string, description: string) => void;
+  onSave: (name: string, description: string, options: { keywords: string[]; doList: string[]; dontList: string[] }) => void;
   initialName?: string;
   initialDescription?: string;
 }
@@ -12,12 +12,18 @@ interface Props {
 export const AddTrackModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialName = '', initialDescription = '' }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [keywords, setKeywords] = useState('');
+  const [doList, setDoList] = useState('');
+  const [dontList, setDontList] = useState('');
 
   // Update state when initial values change or modal opens
   useEffect(() => {
     if (isOpen) {
         setName(initialName);
         setDescription(initialDescription);
+        setKeywords('');
+        setDoList('');
+        setDontList('');
     }
   }, [isOpen, initialName, initialDescription]);
 
@@ -59,6 +65,36 @@ export const AddTrackModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                This description is vectorized and used to match screenshots. Be specific about visual cues.
             </p>
           </div>
+
+          <div>
+            <label className="block text-xs font-mono text-gray-400 mb-1">KEYWORDS (comma-separated)</label>
+            <input 
+              value={keywords}
+              onChange={(e) => setKeywords(e.target.value)}
+              placeholder="e.g., client name, domain, tool"
+              className="w-full bg-black/50 border border-cyber-gray rounded p-3 text-white focus:border-cyber-accent outline-none font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-mono text-gray-400 mb-1">DO (one per line)</label>
+            <textarea 
+              value={doList}
+              onChange={(e) => setDoList(e.target.value)}
+              placeholder="What clearly belongs here"
+              className="w-full bg-black/50 border border-cyber-gray rounded p-3 text-white focus:border-cyber-accent outline-none font-mono h-20 resize-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-mono text-gray-400 mb-1">DON'T (one per line)</label>
+            <textarea 
+              value={dontList}
+              onChange={(e) => setDontList(e.target.value)}
+              placeholder="What should NOT be matched"
+              className="w-full bg-black/50 border border-cyber-gray rounded p-3 text-white focus:border-cyber-accent outline-none font-mono h-20 resize-none"
+            />
+          </div>
         </div>
 
         <div className="mt-8 flex justify-end gap-3">
@@ -71,9 +107,26 @@ export const AddTrackModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
           <button 
             onClick={() => {
               if (name && description) {
-                onSave(name, description);
+                const parseCommaList = (value: string) =>
+                  value
+                    .split(',')
+                    .map(entry => entry.trim())
+                    .filter(Boolean);
+                const parseLineList = (value: string) =>
+                  value
+                    .split('\n')
+                    .map(entry => entry.trim())
+                    .filter(Boolean);
+                onSave(name, description, {
+                  keywords: parseCommaList(keywords),
+                  doList: parseLineList(doList),
+                  dontList: parseLineList(dontList),
+                });
                 setName('');
                 setDescription('');
+                setKeywords('');
+                setDoList('');
+                setDontList('');
                 onClose();
               }
             }}

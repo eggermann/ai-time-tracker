@@ -3,6 +3,12 @@ export interface HistoryItem {
   timestamp: number;
   reason: string;
   duration: number; 
+  matchId?: string | null;
+  candidates?: Candidate[];
+  confidenceHint?: string;
+  whyNotSecond?: string;
+  isEdgeCase?: boolean;
+  action?: string | null;
 }
 
 export interface TodoItem {
@@ -16,12 +22,31 @@ export interface TrackItem {
   name: string;
   description: string;
   notes?: string;
+  keywords?: string[];
+  doList?: string[];
+  dontList?: string[];
+  tags?: string[];
+  clientName?: string;
+  billable?: boolean;
+  parentId?: string;
+  ruleHints?: RuleHints;
   todos?: TodoItem[];
   totalTime: number; 
   detectCount: number;
   lastActive: number; 
   history: HistoryItem[];
   isUnknown?: boolean;
+}
+
+export interface Candidate {
+  id: string;
+  confidenceHint: string;
+}
+
+export interface RuleHints {
+  keywords?: string[];
+  windowTitleHints?: string[];
+  urlHints?: string[];
 }
 
 export interface VectorDocument {
@@ -36,4 +61,8 @@ export interface VectorDocument {
 export interface AnalysisResult {
   matchId: string | null;
   reason: string;
+  candidates?: Candidate[];
+  confidenceHint?: string;
+  whyNotSecond?: string;
+  action?: string | null;
 }
